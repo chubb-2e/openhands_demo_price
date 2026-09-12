@@ -1,10 +1,8 @@
-name: OpenHands Issue Resolver
+name: OpenHands Issue Demo
 
 on:
   issues:
     types: [labeled]
-  issue_comment:
-    types: [created]
 
 permissions:
   contents: write
@@ -12,29 +10,50 @@ permissions:
   pull-requests: write
 
 jobs:
-  resolve:
-    if: |
-      (github.event_name == 'issues' && github.event.label.name == 'fix-me') ||
-      (github.event_name == 'issue_comment' && startsWith(github.event.comment.body, '@openhands-agent'))
+  openhands:
+    if: github.event.label.name == 'fix-me'
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run OpenHands Resolver
-        env:
-          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
-          LLM_MODEL: ${{ vars.LLM_MODEL }}
-          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
-          PAT_USERNAME: ${{ vars.PAT_USERNAME }}
-        run: |
-          pip install openhands-ai
+      - name: Start OpenHands from GitHub Issue
+        id: openhands
+        uses: All-Hands-AI/openhands-github-action@v1
+        with:
+          openhands-api-key: ${{ secrets.OPENHANDS_API_KEY }}
+          repository: ${{ github.repository }}
+          selected-branch: main
+          poll: "true"
+          prompt: |
+            A GitHub issue has requested a bug fix.
 
-          python -m openhands.resolver.resolve_issue \
-            --selected-repo "${{ github.repository }}" \
-            --issue-number "${{ github.event.issue.number }}"
+            Issue #${{ github.event.issue.number }}
+            Title: ${{ github.event.issue.title }}
 
-          python -m openhands.resolver.send_pull_request \
-            --issue-number "${{ github.event.issue.number }}" \
-            --username "${{ vars.PAT_USERNAME }}" \
-            --pr-type draft
+            Issue body:
+            ${{ github.event.issue.body }}
+
+            Use the safe-bugfix skill in this repository.
+            Investigate the issue, modify the necessary code,
+            run the tests, and verify the fix.
+
+            Delegate the final review to a reviewer sub-agent.
+
+            If the fix is valid, commit the changes to a new branch
+            and create a pull request referencing this issue.
+
+      - name: Comment result on issue
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body:
+                '🤖 OpenHands workflow finished.\n\n' +
+                'Status: `${{ steps.openhands.outputs.status }}`\n\n' +
+                '🔗 [OpenHands conversation](${{ steps.openhands.outputs.conversation-url }})'
+            })
